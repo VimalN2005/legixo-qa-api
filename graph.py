@@ -21,8 +21,12 @@ class AgentState(TypedDict):
     trace: List[str]
 
 # Structured output schemas
-class GradeDocument(BaseModel):
-    relevant: bool = Field(description="Is the document chunk relevant/useful to answer the question? True or False.")
+class ChunkRelevance(BaseModel):
+    chunk_id: str = Field(description="The unique ID of the document chunk.")
+    relevant: bool = Field(description="Is this chunk relevant to the query? True or False.")
+
+class GradeDocumentsResponse(BaseModel):
+    grades: List[ChunkRelevance] = Field(description="Relevance grades for all provided chunks.")
 
 # Helper to get embedding model
 def get_embeddings_model():
@@ -41,8 +45,8 @@ def get_llm():
     provider = os.getenv("LLM_PROVIDER", "google").lower()
     if provider == "google":
         from langchain_google_genai import ChatGoogleGenerativeAI
-        # Using gemini-1.5-flash for speed and reliability
-        return ChatGoogleGenerativeAI(model="gemini-1.5-flash", temperature=0)
+        # Using gemini-2.0-flash for speed and reliability
+        return ChatGoogleGenerativeAI(model="gemini-2.0-flash", temperature=0)
     elif provider == "openai":
         from langchain_openai import ChatOpenAI
         return ChatOpenAI(model="gpt-4o-mini", temperature=0)
@@ -85,38 +89,54 @@ def retrieve_node(state: AgentState) -> Dict[str, Any]:
     }
 
 def grade_documents_node(state: AgentState) -> Dict[str, Any]:
-    """Grade retrieved chunks for relevance to the original question."""
+    """Grade all retrieved chunks for relevance to the original question in a single batch call."""
     question = state["question"]
     chunks = state["retrieved_chunks"]
     trace = list(state.get("trace", []))
     
+    if not chunks:
+        trace.append("grade_documents: No chunks to grade.")
+        return {"relevant_chunks": [], "trace": trace}
+        
     llm = get_llm()
-    # Structured output ensures we get a strict boolean response
-    grader = llm.with_structured_output(GradeDocument)
+    # Batch grader structure
+    grader = llm.with_structured_output(GradeDocumentsResponse)
+    
+    # Format chunks for LLM review
+    chunks_str = ""
+    for chunk in chunks:
+        chunks_str += f"--- Chunk ID: {chunk['chunk_id']} ---\n{chunk['text']}\n\n"
+        
+    system_prompt = (
+        "You are a legal assistant grading the relevance of retrieved document chunks to a user query. "
+        "Review each chunk and determine if it contains facts or context relevant to answering the query. "
+        "Return a relevance grade (true or false) for every single chunk by ID."
+    )
+    user_prompt = f"Query: {question}\n\nDocument Chunks:\n{chunks_str}"
     
     relevant_chunks = []
-    
-    for chunk in chunks:
-        # Prompt the grader
-        system_prompt = (
-            "You are a legal assistant grading the relevance of a retrieved document chunk to a user query. "
-            "Evaluate if the chunk contains information, facts, or context that is directly relevant to answering the query. "
-            "Respond ONLY with the specified schema (relevant: true/false)."
-        )
-        user_prompt = f"Query: {question}\n\nDocument Chunk:\n{chunk['text']}"
+    try:
+        result = grader.invoke([
+            SystemMessage(content=system_prompt),
+            HumanMessage(content=user_prompt)
+        ])
         
-        try:
-            result = grader.invoke([
-                SystemMessage(content=system_prompt),
-                HumanMessage(content=user_prompt)
-            ])
-            if result.relevant:
+        # Create a lookup for relevance
+        relevance_map = {item.chunk_id: item.relevant for item in result.grades}
+        
+        for chunk in chunks:
+            is_relevant = relevance_map.get(chunk["chunk_id"], False)
+            if is_relevant:
                 relevant_chunks.append(chunk)
                 trace.append(f"grade_documents: Chunk '{chunk['chunk_id']}' graded RELEVANT.")
             else:
                 trace.append(f"grade_documents: Chunk '{chunk['chunk_id']}' graded NOT RELEVANT.")
-        except Exception as e:
-            trace.append(f"grade_documents: Error grading chunk '{chunk['chunk_id']}': {e}")
+                
+    except Exception as e:
+        trace.append(f"grade_documents: Error in batch grading: {e}")
+        # Fallback: if batch grading fails, assume all chunks are relevant to be safe
+        relevant_chunks = chunks
+        trace.append("grade_documents: Falling back to treating all chunks as relevant due to error.")
             
     return {
         "relevant_chunks": relevant_chunks,
@@ -171,7 +191,8 @@ def generate_answer_node(state: AgentState) -> Dict[str, Any]:
         "1. If the provided chunks do not contain the answer, reply with: 'I cannot find the answer in the provided documents.'\n"
         "2. Do not make up facts or use external knowledge.\n"
         "3. Incorporate citations inline or at the end indicating which chunk/source file the information came from (e.g. [01_matter_memo_arvind_v_northfield.md]).\n"
-        "4. Be clear, professional, and factual."
+        "4. Be clear, professional, and factual.\n"
+        "5. Be comprehensive: Include all specific details, conditions, requirements, or related obligations (such as returning property or listing counter-arguments) mentioned in the relevant section of the document chunks."
     )
     user_prompt = f"Context Chunks:\n{context_str}\nQuestion: {question}"
     

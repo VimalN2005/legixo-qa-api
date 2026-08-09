@@ -2,6 +2,7 @@ import json
 import urllib.request
 import urllib.error
 import sys
+import time
 
 def run_tests():
     url = "http://127.0.0.1:8000/ask"
@@ -18,6 +19,7 @@ def run_tests():
     results = []
     
     for case in test_cases:
+        time.sleep(3)
         case_id = case["id"]
         q_type = case["type"]
         question = case["question"]
