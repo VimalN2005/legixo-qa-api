@@ -11,14 +11,21 @@ load_dotenv()
 def get_embeddings_and_dimension():
     provider = os.getenv("LLM_PROVIDER", "google").lower()
     if provider == "google":
-        from langchain_google_genai import GoogleGenAIEmbeddings
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
         api_key = os.getenv("GOOGLE_API_KEY")
         if not api_key:
             print("Error: GOOGLE_API_KEY is not set in environment.")
             sys.exit(1)
-        # Using models/text-embedding-004 (768 dimensions)
-        embeddings = GoogleGenAIEmbeddings(model="models/text-embedding-004", google_api_key=api_key)
-        return embeddings, 768
+        # Using models/gemini-embedding-001
+        embeddings = GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001", google_api_key=api_key)
+        try:
+            dummy_vector = embeddings.embed_query("dummy")
+            dimension = len(dummy_vector)
+            print(f"Detected Gemini embedding model dimension: {dimension}")
+        except Exception as e:
+            print(f"Error getting embedding dimension: {e}")
+            sys.exit(1)
+        return embeddings, dimension
     elif provider == "openai":
         from langchain_openai import OpenAIEmbeddings
         api_key = os.getenv("OPENAI_API_KEY")

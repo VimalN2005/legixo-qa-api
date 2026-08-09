@@ -28,8 +28,8 @@ class GradeDocument(BaseModel):
 def get_embeddings_model():
     provider = os.getenv("LLM_PROVIDER", "google").lower()
     if provider == "google":
-        from langchain_google_genai import GoogleGenAIEmbeddings
-        return GoogleGenAIEmbeddings(model="models/text-embedding-004")
+        from langchain_google_genai import GoogleGenerativeAIEmbeddings
+        return GoogleGenerativeAIEmbeddings(model="models/gemini-embedding-001")
     elif provider == "openai":
         from langchain_openai import OpenAIEmbeddings
         return OpenAIEmbeddings(model="text-embedding-3-small")
